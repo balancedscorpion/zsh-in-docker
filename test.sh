@@ -6,17 +6,30 @@ set -e
 
 trap 'docker compose stop -t 1' EXIT INT
 
+#Different create_user commands for different distributions
 create_user() {
     container=$1
     username=$2
 
-    if docker exec $container which useradd >/dev/null 2>&1; then
-        docker exec $container useradd -m $username
-    elif docker exec $container which adduser >/dev/null 2>&1; then
-        # Alpine Linux uses adduser
+    # Check if the user already exists
+    if docker exec $container id -u $username >/dev/null 2>&1; then
+        echo "User $username already exists"
+        return 0
+    fi
+
+    # Try to determine the distribution
+    if docker exec $container cat /etc/os-release | grep -q "ID=alpine"; then
         docker exec $container adduser -D $username
+    elif docker exec $container cat /etc/os-release | grep -q "ID=amzn"; then
+        # For Amazon Linux
+        docker exec $container useradd -m $username
     else
-        echo "Error: Unable to create user. Neither useradd nor adduser is available."
+        # For most other distributions
+        docker exec $container useradd -m $username || docker exec $container adduser --disabled-password --gecos "" $username
+    fi
+
+    if [ $? -ne 0 ]; then
+        echo "Error: Unable to create user $username"
         return 1
     fi
 }
