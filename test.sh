@@ -7,28 +7,41 @@ set -e
 trap 'docker compose stop -t 1' EXIT INT
 
 
+identify_os() {
+    container=$1
+    if docker exec $container sh -c "[ -f /etc/os-release ]"; then
+        docker exec $container sh -c "cat /etc/os-release" | grep -E "^ID=" | cut -d= -f2 | tr -d '"'
+    elif docker exec $container sh -c "[ -f /etc/alpine-release ]"; then
+        echo "alpine"
+    else
+        echo "unknown"
+    fi
+}
+
 create_user() {
     container=$1
     username=$2
-    
-    # Check if useradd exists using 'command -v' instead of 'which'
-    if docker exec $container bash -c "command -v useradd" >/dev/null 2>&1; then
-        docker exec $container useradd -m $username
-    elif docker exec $container bash -c "command -v adduser" >/dev/null 2>&1; then
-        # Alpine Linux uses adduser
-        docker exec $container adduser -D $username
-    elif docker exec $container bash -c "grep -q 'Amazon Linux' /etc/os-release"; then
-        # Special handling for Amazon Linux
-        docker exec $container yum install -y shadow-utils
-        docker exec $container useradd -m $username
-    elif docker exec $container bash -c "command -v dnf" >/dev/null 2>&1; then
-        # For Rocky Linux and other dnf-based systems
-        docker exec $container dnf install -y shadow-utils
-        docker exec $container useradd -m $username
-    else
-        echo "Error: Unable to create user. No supported method found."
-        return 1
-    fi
+    os=$(identify_os $container)
+
+    case $os in
+        alpine)
+            docker exec $container adduser -D $username
+            ;;
+        ubuntu|debian)
+            docker exec $container useradd -m $username
+            ;;
+        amzn|amazonlinux)
+            docker exec $container yum install -y shadow-utils
+            docker exec $container useradd -m $username
+            ;;
+        centos|rocky|fedora)
+            docker exec $container useradd -m $username
+            ;;
+        *)
+            echo "Error: Unsupported operating system for user creation."
+            return 1
+            ;;
+    esac
 }
 
 test_suite() {
