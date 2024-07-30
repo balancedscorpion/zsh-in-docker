@@ -12,6 +12,7 @@ The original goal was to simplify setting up `zsh` and Oh My Zsh in a Docker ima
 extension](https://code.visualstudio.com/docs/remote/containers), but it can be used whenever you
 need a simple way to install Oh My Zsh and its plugins in a Docker image
 
+
 ## Usage
 
 One line installation: add the following line in your `Dockerfile`:
