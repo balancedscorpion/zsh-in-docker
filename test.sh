@@ -10,17 +10,23 @@ trap 'docker compose stop -t 1' EXIT INT
 create_user() {
     container=$1
     username=$2
-    if docker exec $container which useradd >/dev/null 2>&1; then
+    
+    # Check if useradd exists using 'command -v' instead of 'which'
+    if docker exec $container bash -c "command -v useradd" >/dev/null 2>&1; then
         docker exec $container useradd -m $username
-    elif docker exec $container which adduser >/dev/null 2>&1; then
+    elif docker exec $container bash -c "command -v adduser" >/dev/null 2>&1; then
         # Alpine Linux uses adduser
         docker exec $container adduser -D $username
-    elif docker exec $container cat /etc/os-release | grep -q 'Amazon Linux'; then
+    elif docker exec $container bash -c "grep -q 'Amazon Linux' /etc/os-release"; then
         # Special handling for Amazon Linux
         docker exec $container yum install -y shadow-utils
         docker exec $container useradd -m $username
+    elif docker exec $container bash -c "command -v dnf" >/dev/null 2>&1; then
+        # For Rocky Linux and other dnf-based systems
+        docker exec $container dnf install -y shadow-utils
+        docker exec $container useradd -m $username
     else
-        echo "Error: Unable to create user. Neither useradd nor adduser is available."
+        echo "Error: Unable to create user. No supported method found."
         return 1
     fi
 }
