@@ -6,11 +6,23 @@ set -e
 
 trap 'docker compose stop -t 1' EXIT INT
 
-run_as_user() {
+
+create_user() {
     container=$1
     username=$2
-    shift 2
-    docker exec $container su -s /bin/sh nobody -c "$*"
+    if docker exec $container which useradd >/dev/null 2>&1; then
+        docker exec $container useradd -m $username
+    elif docker exec $container which adduser >/dev/null 2>&1; then
+        # Alpine Linux uses adduser
+        docker exec $container adduser -D $username
+    elif docker exec $container cat /etc/os-release | grep -q 'Amazon Linux'; then
+        # Special handling for Amazon Linux
+        docker exec $container yum install -y shadow-utils
+        docker exec $container useradd -m $username
+    else
+        echo "Error: Unable to create user. Neither useradd nor adduser is available."
+        return 1
+    fi
 }
 
 test_suite() {
@@ -29,14 +41,16 @@ test_suite() {
     docker cp zsh-in-docker.sh zsh-in-docker-test-${image_name}-1:/tmp
 
     if [ "$user_type" = "non-root" ]; then
-        run_as_user zsh-in-docker-test-${image_name}-1 nobody sh /tmp/zsh-in-docker.sh \
+        # Create a non-root user
+        create_user zsh-in-docker-test-${image_name}-1 dockeruser
+        docker exec zsh-in-docker-test-${image_name}-1 sh /tmp/zsh-in-docker.sh \
             -t https://github.com/denysdovhan/spaceship-prompt \
             -p git -p git-auto-fetch \
             -p https://github.com/zsh-users/zsh-autosuggestions \
             -p https://github.com/zsh-users/zsh-completions \
             -a 'CASE_SENSITIVE="true"' \
             -a 'HYPHEN_INSENSITIVE="true"' \
-            -u nobody
+            -u dockeruser
     else
         docker exec zsh-in-docker-test-${image_name}-1 sh /tmp/zsh-in-docker.sh \
             -t https://github.com/denysdovhan/spaceship-prompt \
@@ -54,8 +68,8 @@ test_suite() {
     VERSION=$(docker exec zsh-in-docker-test-${image_name}-1 zsh --version)
     
     if [ "$user_type" = "non-root" ]; then
-        ZSHRC=$(run_as_user zsh-in-docker-test-${image_name}-1 nobody cat /home/nobody/.zshrc)
-        HOME_DIR="/home/nobody"
+        ZSHRC=$(docker exec zsh-in-docker-test-${image_name}-1 cat /home/dockeruser/.zshrc)
+        HOME_DIR="/home/dockeruser"
     else
         ZSHRC=$(docker exec zsh-in-docker-test-${image_name}-1 cat /root/.zshrc)
         HOME_DIR="/root"
@@ -74,8 +88,8 @@ test_suite() {
     echo "Test: newline is expanded when append lines" && assert_not_contain "$ZSHRC" '\nCASE_SENSITIVE="true"' "!"
 
     if [ "$user_type" = "non-root" ]; then
-        echo "Test: .zshrc owner is nobody" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -l /home/nobody/.zshrc)" "nobody" "!"
-        echo "Test: .oh-my-zsh owner is nobody" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -ld /home/nobody/.oh-my-zsh)" "nobody" "!"
+        echo "Test: .zshrc owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -l /home/dockeruser/.zshrc)" "dockeruser" "!"
+        echo "Test: .oh-my-zsh owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -ld /home/dockeruser/.oh-my-zsh)" "dockeruser" "!"
     fi
 
     echo
