@@ -6,6 +6,21 @@ set -e
 
 trap 'docker compose stop -t 1' EXIT INT
 
+create_user() {
+    container=$1
+    username=$2
+
+    if docker exec $container which useradd >/dev/null 2>&1; then
+        docker exec $container useradd -m $username
+    elif docker exec $container which adduser >/dev/null 2>&1; then
+        # Alpine Linux uses adduser
+        docker exec $container adduser -D $username
+    else
+        echo "Error: Unable to create user. Neither useradd nor adduser is available."
+        return 1
+    fi
+}
+
 test_suite() {
     image_name=$1
     user_type=$2
@@ -23,7 +38,7 @@ test_suite() {
 
     if [ "$user_type" = "non-root" ]; then
         # Create a non-root user
-        docker exec zsh-in-docker-test-${image_name}-1 useradd -m dockeruser
+        create_user zsh-in-docker-test-${image_name}-1 dockeruser
         docker exec zsh-in-docker-test-${image_name}-1 sh /tmp/zsh-in-docker.sh \
             -t https://github.com/denysdovhan/spaceship-prompt \
             -p git -p git-auto-fetch \
@@ -69,8 +84,8 @@ test_suite() {
     echo "Test: newline is expanded when append lines" && assert_not_contain "$ZSHRC" '\nCASE_SENSITIVE="true"' "!"
 
     if [ "$user_type" = "non-root" ]; then
-        echo "Test: .zshrc owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -l /home/dockeruser/.zshrc)" "dockeruser dockeruser" "!"
-        echo "Test: .oh-my-zsh owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -ld /home/dockeruser/.oh-my-zsh)" "dockeruser dockeruser" "!"
+        echo "Test: .zshrc owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -l /home/dockeruser/.zshrc)" "dockeruser" "!"
+        echo "Test: .oh-my-zsh owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -ld /home/dockeruser/.oh-my-zsh)" "dockeruser" "!"
     fi
 
     echo
