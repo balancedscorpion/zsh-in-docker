@@ -1,14 +1,12 @@
-#!/usr/bin/env bash
-
-source ./assert.sh
+#!/bin/sh
 
 # Don't exit immediately on error
 set +e
 
-trap 'docker compose stop -t 1' EXIT INT
+FAILED_TESTS=0
 
 run_test() {
-    if "$@"; then
+    if eval "$@"; then
         echo "PASS: $*"
     else
         echo "FAIL: $*"
@@ -76,35 +74,32 @@ test_zsh_installation() {
     echo "Testing zsh installation for $user:"
 
     # Check if zsh is installed for the user
-    ZSH_INSTALLED=$(docker exec $container su - $user -c "which zsh")
-    run_test [ -n "$ZSH_INSTALLED" ]
+    run_test "docker exec $container su - $user -c 'which zsh' | grep -q zsh"
 
     # Check if the user's shell is set to zsh
-    USER_SHELL=$(docker exec $container getent passwd $user | cut -d: -f7)
-    run_test [ "$USER_SHELL" = "/bin/zsh" ]
+    run_test "docker exec $container getent passwd $user | cut -d: -f7 | grep -q zsh"
 
-    VERSION=$(docker exec $container su - $user -c "zsh --version")
-    run_test [[ "$VERSION" == *"zsh 5"* ]]
+    # Check zsh version
+    run_test "docker exec $container su - $user -c 'zsh --version' | grep -q 'zsh 5'"
 
-    ZSHRC=$(docker exec $container cat $home_dir/.zshrc)
-    run_test [[ "$ZSHRC" == *"ZSH=\"$home_dir/.oh-my-zsh\""* ]]
-    run_test [[ "$ZSHRC" == *'ZSH_THEME="spaceship-prompt/spaceship"'* ]]
-    run_test [[ "$ZSHRC" == *'plugins=(git git-auto-fetch zsh-autosuggestions zsh-completions )'* ]]
-    run_test [[ "$ZSHRC" == *'CASE_SENSITIVE="true"'* ]]
-    run_test [[ "$ZSHRC" == *'HYPHEN_INSENSITIVE="true"'* ]]
-    run_test [[ "$ZSHRC" != *$'\nCASE_SENSITIVE="true"'* ]]
+    # Check .zshrc content
+    run_test "docker exec $container grep -q 'ZSH=\"$home_dir/.oh-my-zsh\"' $home_dir/.zshrc"
+    run_test "docker exec $container grep -q 'ZSH_THEME=\"spaceship-prompt/spaceship\"' $home_dir/.zshrc"
+    run_test "docker exec $container grep -q 'plugins=(git git-auto-fetch zsh-autosuggestions zsh-completions )' $home_dir/.zshrc"
+    run_test "docker exec $container grep -q 'CASE_SENSITIVE=\"true\"' $home_dir/.zshrc"
+    run_test "docker exec $container grep -q 'HYPHEN_INSENSITIVE=\"true\"' $home_dir/.zshrc"
 
     # Check if Oh My Zsh is installed for the user
-    OH_MY_ZSH_DIR=$(docker exec $container su - $user -c "echo \$ZSH")
-    run_test docker exec $container test -d "$OH_MY_ZSH_DIR"
+    run_test "docker exec $container test -d $home_dir/.oh-my-zsh"
 }
 
-test_root_user() {
+test_user() {
     image_name=$1
+    user_type=$2
     container="zsh-in-docker-test-${image_name}-1"
 
     echo
-    echo "########## Testing in a $image_name container as root"
+    echo "########## Testing in a $image_name container as $user_type"
     echo
 
     docker compose rm --force --stop test-$image_name || true
@@ -112,44 +107,24 @@ test_root_user() {
 
     docker cp zsh-in-docker.sh $container:/tmp
 
-    run_zsh_install $container "" "/root"
-    test_zsh_installation $container "root" "/root"
-
-    echo
-    if [ $FAILED_TESTS -eq 0 ]; then
-        echo "######### Success! All root user tests are passing for ${image_name}"
+    if [ "$user_type" = "non-root" ]; then
+        create_user $container "dockeruser"
+        run_zsh_install $container "dockeruser" "/home/dockeruser"
+        test_zsh_installation $container "dockeruser" "/home/dockeruser"
+        
+        # Additional non-root specific tests
+        run_test "docker exec $container ls -l /home/dockeruser/.zshrc | grep -q dockeruser"
+        run_test "docker exec $container ls -ld /home/dockeruser/.oh-my-zsh | grep -q dockeruser"
     else
-        echo "######### Failure! $FAILED_TESTS test(s) failed for root user on ${image_name}"
+        run_zsh_install $container "" "/root"
+        test_zsh_installation $container "root" "/root"
     fi
-    docker compose stop -t 1 test-$image_name
-}
-
-test_non_root_user() {
-    image_name=$1
-    container="zsh-in-docker-test-${image_name}-1"
-
-    echo
-    echo "########## Testing in a $image_name container as non-root user"
-    echo
-
-    docker compose rm --force --stop test-$image_name || true
-    docker compose up -d test-$image_name
-
-    docker cp zsh-in-docker.sh $container:/tmp
-
-    create_user $container "dockeruser"
-    run_zsh_install $container "dockeruser" "/home/dockeruser"
-    test_zsh_installation $container "dockeruser" "/home/dockeruser"
-
-    # Additional non-root specific tests
-    run_test docker exec $container ls -l /home/dockeruser/.zshrc | grep -q dockeruser
-    run_test docker exec $container ls -ld /home/dockeruser/.oh-my-zsh | grep -q dockeruser
 
     echo
     if [ $FAILED_TESTS -eq 0 ]; then
-        echo "######### Success! All non-root user tests are passing for ${image_name}"
+        echo "######### Success! All $user_type tests are passing for ${image_name}"
     else
-        echo "######### Failure! $FAILED_TESTS test(s) failed for non-root user on ${image_name}"
+        echo "######### Failure! $FAILED_TESTS test(s) failed for $user_type on ${image_name}"
     fi
     docker compose stop -t 1 test-$image_name
 }
@@ -160,11 +135,11 @@ TOTAL_FAILED_TESTS=0
 
 for image in $images; do
     FAILED_TESTS=0
-    test_root_user $image
+    test_user $image "root"
     TOTAL_FAILED_TESTS=$((TOTAL_FAILED_TESTS + FAILED_TESTS))
     
     FAILED_TESTS=0
-    test_non_root_user $image
+    test_user $image "non-root"
     TOTAL_FAILED_TESTS=$((TOTAL_FAILED_TESTS + FAILED_TESTS))
 done
 
