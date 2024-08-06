@@ -6,6 +6,30 @@ set -e
 
 trap 'docker compose stop -t 1' EXIT INT
 
+# Simple implementation of assert_equal if it's not defined
+if ! command -v assert_equal &> /dev/null; then
+    assert_equal() {
+        if [ "$1" = "$2" ]; then
+            echo "Assertion passed: $1 equals $2"
+        else
+            echo "Assertion failed: $1 does not equal $2"
+            return 1
+        fi
+    }
+fi
+
+# Simple implementation of assert_dir_exists if it's not defined
+if ! command -v assert_dir_exists &> /dev/null; then
+    assert_dir_exists() {
+        if [ -d "$1" ]; then
+            echo "Assertion passed: Directory $1 exists"
+        else
+            echo "Assertion failed: Directory $1 does not exist"
+            return 1
+        fi
+    }
+fi
+
 identify_os() {
     container=$1
     if docker exec $container sh -c "[ -f /etc/os-release ]"; then
@@ -67,26 +91,26 @@ test_zsh_installation() {
 
     # Check if zsh is installed for the user
     ZSH_INSTALLED=$(docker exec $container su - $user -c "which zsh")
-    echo "Test: zsh is installed for $user" && assert_not_empty "$ZSH_INSTALLED" "!"
+    echo "Test: zsh is installed for $user" && [ -n "$ZSH_INSTALLED" ]
 
     # Check if the user's shell is set to zsh
     USER_SHELL=$(docker exec $container getent passwd $user | cut -d: -f7)
-    echo "Test: $user's shell is set to zsh" && assert_equal "$USER_SHELL" "/bin/zsh" "!"
+    echo "Test: $user's shell is set to zsh" && [ "$USER_SHELL" = "/bin/zsh" ]
 
     VERSION=$(docker exec $container su - $user -c "zsh --version")
     ZSHRC=$(docker exec $container cat $home_dir/.zshrc)
 
-    echo "Test: zsh 5 was installed" && assert_contain "$VERSION" "zsh 5" "!"
-    echo "Test: ~/.zshrc was generated" && assert_contain "$ZSHRC" "ZSH=\"$home_dir/.oh-my-zsh\"" "!"
-    echo "Test: theme was configured" && assert_contain "$ZSHRC" 'ZSH_THEME="spaceship-prompt/spaceship"' "!"
-    echo "Test: plugins were configured" && assert_contain "$ZSHRC" 'plugins=(git git-auto-fetch zsh-autosuggestions zsh-completions )' "!"
-    echo "Test: line 1 is appended to ~/.zshrc" && assert_contain "$ZSHRC" 'CASE_SENSITIVE="true"' "!"
-    echo "Test: line 2 is appended to ~/.zshrc" && assert_contain "$ZSHRC" 'HYPHEN_INSENSITIVE="true"' "!"
-    echo "Test: newline is expanded when append lines" && assert_not_contain "$ZSHRC" '\nCASE_SENSITIVE="true"' "!"
+    echo "Test: zsh 5 was installed" && [[ "$VERSION" == *"zsh 5"* ]]
+    echo "Test: ~/.zshrc was generated" && [[ "$ZSHRC" == *"ZSH=\"$home_dir/.oh-my-zsh\""* ]]
+    echo "Test: theme was configured" && [[ "$ZSHRC" == *'ZSH_THEME="spaceship-prompt/spaceship"'* ]]
+    echo "Test: plugins were configured" && [[ "$ZSHRC" == *'plugins=(git git-auto-fetch zsh-autosuggestions zsh-completions )'* ]]
+    echo "Test: line 1 is appended to ~/.zshrc" && [[ "$ZSHRC" == *'CASE_SENSITIVE="true"'* ]]
+    echo "Test: line 2 is appended to ~/.zshrc" && [[ "$ZSHRC" == *'HYPHEN_INSENSITIVE="true"'* ]]
+    echo "Test: newline is expanded when append lines" && [[ "$ZSHRC" != *$'\nCASE_SENSITIVE="true"'* ]]
 
     # Check if Oh My Zsh is installed for the user
     OH_MY_ZSH_DIR=$(docker exec $container su - $user -c "echo \$ZSH")
-    echo "Test: Oh My Zsh is installed for $user" && assert_dir_exists "$OH_MY_ZSH_DIR" "!"
+    echo "Test: Oh My Zsh is installed for $user" && docker exec $container test -d "$OH_MY_ZSH_DIR"
 }
 
 test_root_user() {
@@ -128,8 +152,8 @@ test_non_root_user() {
     test_zsh_installation $container "dockeruser" "/home/dockeruser"
 
     # Additional non-root specific tests
-    echo "Test: .zshrc owner is dockeruser" && assert_contain "$(docker exec $container ls -l /home/dockeruser/.zshrc)" "dockeruser" "!"
-    echo "Test: .oh-my-zsh owner is dockeruser" && assert_contain "$(docker exec $container ls -ld /home/dockeruser/.oh-my-zsh)" "dockeruser" "!"
+    echo "Test: .zshrc owner is dockeruser" && docker exec $container ls -l /home/dockeruser/.zshrc | grep -q dockeruser
+    echo "Test: .oh-my-zsh owner is dockeruser" && docker exec $container ls -ld /home/dockeruser/.oh-my-zsh | grep -q dockeruser
 
     echo
     echo "######### Success! All non-root user tests are passing for ${image_name}"
