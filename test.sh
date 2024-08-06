@@ -6,7 +6,6 @@ set -e
 
 trap 'docker compose stop -t 1' EXIT INT
 
-
 identify_os() {
     container=$1
     if docker exec $container sh -c "[ -f /etc/os-release ]"; then
@@ -44,81 +43,102 @@ create_user() {
     esac
 }
 
-test_suite() {
-    image_name=$1
-    user_type=$2
+run_zsh_install() {
+    container=$1
+    user=$2
+    home_dir=$3
 
-    echo
-    echo "########## Testing in a $image_name container as $user_type"
-    echo
+    docker exec $container sh /tmp/zsh-in-docker.sh \
+        -t https://github.com/denysdovhan/spaceship-prompt \
+        -p git -p git-auto-fetch \
+        -p https://github.com/zsh-users/zsh-autosuggestions \
+        -p https://github.com/zsh-users/zsh-completions \
+        -a 'CASE_SENSITIVE="true"' \
+        -a 'HYPHEN_INSENSITIVE="true"' \
+        ${user:+-u "$user"}
+}
 
-    set -x
+test_zsh_installation() {
+    container=$1
+    user=$2
+    home_dir=$3
 
-    docker compose rm --force --stop test-$image_name || true
-    docker compose up -d test-$image_name
+    echo "Testing zsh installation for $user:"
 
-    docker cp zsh-in-docker.sh zsh-in-docker-test-${image_name}-1:/tmp
+    # Check if zsh is installed for the user
+    ZSH_INSTALLED=$(docker exec $container su - $user -c "which zsh")
+    echo "Test: zsh is installed for $user" && assert_not_empty "$ZSH_INSTALLED" "!"
 
-    if [ "$user_type" = "non-root" ]; then
-        # Create a non-root user
-        create_user zsh-in-docker-test-${image_name}-1 dockeruser
-        docker exec zsh-in-docker-test-${image_name}-1 sh /tmp/zsh-in-docker.sh \
-            -t https://github.com/denysdovhan/spaceship-prompt \
-            -p git -p git-auto-fetch \
-            -p https://github.com/zsh-users/zsh-autosuggestions \
-            -p https://github.com/zsh-users/zsh-completions \
-            -a 'CASE_SENSITIVE="true"' \
-            -a 'HYPHEN_INSENSITIVE="true"' \
-            -u dockeruser
-    else
-        docker exec zsh-in-docker-test-${image_name}-1 sh /tmp/zsh-in-docker.sh \
-            -t https://github.com/denysdovhan/spaceship-prompt \
-            -p git -p git-auto-fetch \
-            -p https://github.com/zsh-users/zsh-autosuggestions \
-            -p https://github.com/zsh-users/zsh-completions \
-            -a 'CASE_SENSITIVE="true"' \
-            -a 'HYPHEN_INSENSITIVE="true"'
-    fi
+    # Check if the user's shell is set to zsh
+    USER_SHELL=$(docker exec $container getent passwd $user | cut -d: -f7)
+    echo "Test: $user's shell is set to zsh" && assert_equal "$USER_SHELL" "/bin/zsh" "!"
 
-    set +x
-
-    echo
-
-    VERSION=$(docker exec zsh-in-docker-test-${image_name}-1 zsh --version)
-    
-    if [ "$user_type" = "non-root" ]; then
-        ZSHRC=$(docker exec zsh-in-docker-test-${image_name}-1 cat /home/dockeruser/.zshrc)
-        HOME_DIR="/home/dockeruser"
-    else
-        ZSHRC=$(docker exec zsh-in-docker-test-${image_name}-1 cat /root/.zshrc)
-        HOME_DIR="/root"
-    fi
-
-    echo "########################################################################################"
-    echo "$ZSHRC"
-    echo "########################################################################################"
+    VERSION=$(docker exec $container su - $user -c "zsh --version")
+    ZSHRC=$(docker exec $container cat $home_dir/.zshrc)
 
     echo "Test: zsh 5 was installed" && assert_contain "$VERSION" "zsh 5" "!"
-    echo "Test: ~/.zshrc was generated" && assert_contain "$ZSHRC" "ZSH=\"$HOME_DIR/.oh-my-zsh\"" "!"
+    echo "Test: ~/.zshrc was generated" && assert_contain "$ZSHRC" "ZSH=\"$home_dir/.oh-my-zsh\"" "!"
     echo "Test: theme was configured" && assert_contain "$ZSHRC" 'ZSH_THEME="spaceship-prompt/spaceship"' "!"
     echo "Test: plugins were configured" && assert_contain "$ZSHRC" 'plugins=(git git-auto-fetch zsh-autosuggestions zsh-completions )' "!"
     echo "Test: line 1 is appended to ~/.zshrc" && assert_contain "$ZSHRC" 'CASE_SENSITIVE="true"' "!"
     echo "Test: line 2 is appended to ~/.zshrc" && assert_contain "$ZSHRC" 'HYPHEN_INSENSITIVE="true"' "!"
     echo "Test: newline is expanded when append lines" && assert_not_contain "$ZSHRC" '\nCASE_SENSITIVE="true"' "!"
 
-    if [ "$user_type" = "non-root" ]; then
-        echo "Test: .zshrc owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -l /home/dockeruser/.zshrc)" "dockeruser" "!"
-        echo "Test: .oh-my-zsh owner is dockeruser" && assert_contain "$(docker exec zsh-in-docker-test-${image_name}-1 ls -ld /home/dockeruser/.oh-my-zsh)" "dockeruser" "!"
-    fi
+    # Check if Oh My Zsh is installed for the user
+    OH_MY_ZSH_DIR=$(docker exec $container su - $user -c "echo \$ZSH")
+    echo "Test: Oh My Zsh is installed for $user" && assert_dir_exists "$OH_MY_ZSH_DIR" "!"
+}
+
+test_root_user() {
+    image_name=$1
+    container="zsh-in-docker-test-${image_name}-1"
 
     echo
-    echo "######### Success! All tests are passing for ${image_name} as ${user_type}"
+    echo "########## Testing in a $image_name container as root"
+    echo
+
+    docker compose rm --force --stop test-$image_name || true
+    docker compose up -d test-$image_name
+
+    docker cp zsh-in-docker.sh $container:/tmp
+
+    run_zsh_install $container "" "/root"
+    test_zsh_installation $container "root" "/root"
+
+    echo
+    echo "######### Success! All root user tests are passing for ${image_name}"
+    docker compose stop -t 1 test-$image_name
+}
+
+test_non_root_user() {
+    image_name=$1
+    container="zsh-in-docker-test-${image_name}-1"
+
+    echo
+    echo "########## Testing in a $image_name container as non-root user"
+    echo
+
+    docker compose rm --force --stop test-$image_name || true
+    docker compose up -d test-$image_name
+
+    docker cp zsh-in-docker.sh $container:/tmp
+
+    create_user $container "dockeruser"
+    run_zsh_install $container "dockeruser" "/home/dockeruser"
+    test_zsh_installation $container "dockeruser" "/home/dockeruser"
+
+    # Additional non-root specific tests
+    echo "Test: .zshrc owner is dockeruser" && assert_contain "$(docker exec $container ls -l /home/dockeruser/.zshrc)" "dockeruser" "!"
+    echo "Test: .oh-my-zsh owner is dockeruser" && assert_contain "$(docker exec $container ls -ld /home/dockeruser/.oh-my-zsh)" "dockeruser" "!"
+
+    echo
+    echo "######### Success! All non-root user tests are passing for ${image_name}"
     docker compose stop -t 1 test-$image_name
 }
 
 images=${*:-"alpine ubuntu ubuntu-14.04 debian amazonlinux centos7 rockylinux8 rockylinux9 fedora"}
 
 for image in $images; do
-    test_suite $image "root"
-    test_suite $image "non-root"
+    test_root_user $image
+    test_non_root_user $image
 done
